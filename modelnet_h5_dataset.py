@@ -14,16 +14,16 @@ sys.path.append(os.path.join(ROOT_DIR, 'utils'))
 import provider
 
 
-# Download dataset for point cloud classification
-DATA_DIR = os.path.join(ROOT_DIR, 'data')
-if not os.path.exists(DATA_DIR):
-    os.mkdir(DATA_DIR)
-if not os.path.exists(os.path.join(DATA_DIR, 'modelnet40_ply_hdf5_2048')):
-    www = 'https://shapenet.cs.stanford.edu/media/modelnet40_ply_hdf5_2048.zip'
-    zipfile = os.path.basename(www)
-    os.system('wget %s; unzip %s' % (www, zipfile))
-    os.system('mv %s %s' % (zipfile[:-4], DATA_DIR))
-    os.system('rm %s' % (zipfile))
+# # Download dataset for point cloud classification
+# DATA_DIR = os.path.join(ROOT_DIR, 'data')
+# if not os.path.exists(DATA_DIR):
+#     os.mkdir(DATA_DIR)
+# if not os.path.exists(os.path.join(DATA_DIR, 'modelnet40_ply_hdf5_2048')):
+#     www = 'https://shapenet.cs.stanford.edu/media/modelnet40_ply_hdf5_2048.zip'
+#     zipfile = os.path.basename(www)
+#     os.system('wget %s; unzip %s' % (www, zipfile))
+#     os.system('mv %s %s' % (zipfile[:-4], DATA_DIR))
+#     os.system('rm %s' % (zipfile))
 
 
 def shuffle_data(data, labels):
@@ -68,7 +68,7 @@ class ModelNetH5Dataset(object):
         self.current_label = None
         self.current_file_idx = 0
         self.batch_idx = 0
-   
+
     def _augment_batch_data(self, batch_data):
         rotated_data = provider.rotate_point_cloud(batch_data)
         rotated_data = provider.rotate_perturbation_point_cloud(rotated_data)
@@ -88,7 +88,7 @@ class ModelNetH5Dataset(object):
         self.batch_idx = 0
         if self.shuffle:
             self.current_data, self.current_label, _ = shuffle_data(self.current_data,self.current_label)
-    
+
     def _has_next_batch_in_file(self):
         return self.batch_idx*self.batch_size < self.current_data.shape[0]
 
@@ -115,10 +115,10 @@ class ModelNetH5Dataset(object):
         label_batch = self.current_label[start_idx:end_idx].copy()
         self.batch_idx += 1
         if augment: data_batch = self._augment_batch_data(data_batch)
-        return data_batch, label_batch 
+        return data_batch, label_batch
 
 if __name__=='__main__':
-    d = ModelNetH5Dataset('data/modelnet40_ply_hdf5_2048/train_files.txt')
+    d = ModelNetH5Dataset('data/outdoor_ply_hdf5_2048/train_files.txt')
     print(d.shuffle)
     print(d.has_next_batch())
     ps_batch, cls_batch = d.next_batch(True)

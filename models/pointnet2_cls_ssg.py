@@ -39,7 +39,7 @@ def get_model(point_cloud, is_training, bn_decay=None):
     net = tf_util.dropout(net, keep_prob=0.5, is_training=is_training, scope='dp1')
     net = tf_util.fully_connected(net, 256, bn=True, is_training=is_training, scope='fc2', bn_decay=bn_decay)
     net = tf_util.dropout(net, keep_prob=0.5, is_training=is_training, scope='dp2')
-    net = tf_util.fully_connected(net, 40, activation_fn=None, scope='fc3')
+    net = tf_util.fully_connected(net, 2, activation_fn=None, scope='fc3')
 
     return net, end_points
 
@@ -56,6 +56,6 @@ def get_loss(pred, label, end_points):
 
 if __name__=='__main__':
     with tf.Graph().as_default():
-        inputs = tf.zeros((32,1024,3))
+        inputs = tf.zeros((32,2048,3))
         output, _ = get_model(inputs, tf.constant(True))
         print(output)

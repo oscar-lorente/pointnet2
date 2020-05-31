@@ -52,7 +52,7 @@ def loadDataFile(filename):
 
 
 class ModelNetH5Dataset(object):
-    def __init__(self, list_filename, batch_size = 32, npoints = 1024, shuffle=True):
+    def __init__(self, list_filename, batch_size = 32, npoints = 2048, shuffle=True):
         self.list_filename = list_filename
         self.batch_size = batch_size
         self.npoints = npoints

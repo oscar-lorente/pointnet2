@@ -68,15 +68,15 @@ HOSTNAME = socket.gethostname()
 NUM_CLASSES = 2
 
 # Shapenet official train/test split
-if FLAGS.normal:
-    assert(NUM_POINT<=10000)
-    DATA_PATH = os.path.join(ROOT_DIR, 'data/modelnet40_normal_resampled')
-    TRAIN_DATASET = modelnet_dataset.ModelNetDataset(root=DATA_PATH, npoints=NUM_POINT, split='train', normal_channel=FLAGS.normal, batch_size=BATCH_SIZE)
-    TEST_DATASET = modelnet_dataset.ModelNetDataset(root=DATA_PATH, npoints=NUM_POINT, split='test', normal_channel=FLAGS.normal, batch_size=BATCH_SIZE)
-else:
-    assert(NUM_POINT<=2048)
-    TRAIN_DATASET = modelnet_h5_dataset.ModelNetH5Dataset(os.path.join(BASE_DIR, 'data/outdoor_ply_hdf5_2048/train_files.txt'), batch_size=BATCH_SIZE, npoints=NUM_POINT, shuffle=True)
-    TEST_DATASET = modelnet_h5_dataset.ModelNetH5Dataset(os.path.join(BASE_DIR, 'data/outdoor_ply_hdf5_2048/test_files.txt'), batch_size=BATCH_SIZE, npoints=NUM_POINT, shuffle=False)
+# if FLAGS.normal:
+#     assert(NUM_POINT<=10000)
+#     DATA_PATH = os.path.join(ROOT_DIR, 'data/modelnet40_normal_resampled')
+#     TRAIN_DATASET = modelnet_dataset.ModelNetDataset(root=DATA_PATH, npoints=NUM_POINT, split='train', normal_channel=FLAGS.normal, batch_size=BATCH_SIZE)
+#     TEST_DATASET = modelnet_dataset.ModelNetDataset(root=DATA_PATH, npoints=NUM_POINT, split='test', normal_channel=FLAGS.normal, batch_size=BATCH_SIZE)
+# else:
+assert(NUM_POINT<=2048)
+TRAIN_DATASET = modelnet_h5_dataset.ModelNetH5Dataset(os.path.join(BASE_DIR, 'data/outdoor_ply_hdf5_2048/train_files.txt'), batch_size=BATCH_SIZE, npoints=NUM_POINT, shuffle=True)
+EVAL_DATASET = modelnet_h5_dataset.ModelNetH5Dataset(os.path.join(BASE_DIR, 'data/outdoor_ply_hdf5_2048/eval_files.txt'), batch_size=BATCH_SIZE, npoints=NUM_POINT, shuffle=False)
 
 def log_string(out_str):
     LOG_FOUT.write(out_str+'\n')
@@ -153,7 +153,7 @@ def train():
         # Add summary writers
         merged = tf.summary.merge_all()
         train_writer = tf.summary.FileWriter(os.path.join(LOG_DIR, 'train'), sess.graph)
-        test_writer = tf.summary.FileWriter(os.path.join(LOG_DIR, 'test'), sess.graph)
+        eval_writer = tf.summary.FileWriter(os.path.join(LOG_DIR, 'eval'), sess.graph)
 
         # Init variables
         init = tf.global_variables_initializer()
@@ -175,7 +175,7 @@ def train():
             sys.stdout.flush()
 
             train_one_epoch(sess, ops, train_writer)
-            eval_one_epoch(sess, ops, test_writer)
+            eval_one_epoch(sess, ops, eval_writer)
 
             # Save the variables to disk.
             if epoch % 10 == 0:
@@ -226,13 +226,13 @@ def train_one_epoch(sess, ops, train_writer):
 
     TRAIN_DATASET.reset()
 
-def eval_one_epoch(sess, ops, test_writer):
+def eval_one_epoch(sess, ops, eval_writer):
     """ ops: dict mapping from string to tf ops """
     global EPOCH_CNT
     is_training = False
 
     # Make sure batch data is of same size
-    cur_batch_data = np.zeros((BATCH_SIZE,NUM_POINT,TEST_DATASET.num_channel()))
+    cur_batch_data = np.zeros((BATCH_SIZE,NUM_POINT,EVAL_DATASET.num_channel()))
     cur_batch_label = np.zeros((BATCH_SIZE), dtype=np.int32)
 
     total_correct = 0
@@ -246,8 +246,8 @@ def eval_one_epoch(sess, ops, test_writer):
     log_string(str(datetime.now()))
     log_string('---- EPOCH %03d EVALUATION ----'%(EPOCH_CNT))
 
-    while TEST_DATASET.has_next_batch():
-        batch_data, batch_label = TEST_DATASET.next_batch(augment=False)
+    while EVAL_DATASET.has_next_batch():
+        batch_data, batch_label = EVAL_DATASET.next_batch(augment=False)
         bsize = batch_data.shape[0]
         # for the last batch in the epoch, the bsize:end are from last batch
         cur_batch_data[0:bsize,...] = batch_data
@@ -258,7 +258,7 @@ def eval_one_epoch(sess, ops, test_writer):
                      ops['is_training_pl']: is_training}
         summary, step, loss_val, pred_val = sess.run([ops['merged'], ops['step'],
             ops['loss'], ops['pred']], feed_dict=feed_dict)
-        test_writer.add_summary(summary, step)
+        eval_writer.add_summary(summary, step)
         pred_val = np.argmax(pred_val, 1)
         correct = np.sum(pred_val[0:bsize] == batch_label[0:bsize])
         total_correct += correct
@@ -275,7 +275,7 @@ def eval_one_epoch(sess, ops, test_writer):
     log_string('eval avg class acc: %f' % (np.mean(np.array(total_correct_class)/np.array(total_seen_class,dtype=np.float))))
     EPOCH_CNT += 1
 
-    TEST_DATASET.reset()
+    EVAL_DATASET.reset()
     return total_correct/float(total_seen)
 
 

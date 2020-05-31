@@ -1,2 +1,2 @@
 pedestrian
-non-pedestrian
+not_pedestrian

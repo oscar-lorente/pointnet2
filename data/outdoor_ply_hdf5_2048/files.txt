@@ -1,0 +1,4 @@
+pedestrian/20200219_174317_072_0.ply
+not_pedestrian/20200219_170442_766_0.ply
+not_pedestrian/20200219_170442_766_1.ply
+pedestrian/20200219_174322_400_1.ply

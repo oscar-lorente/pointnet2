@@ -28,7 +28,7 @@ parser = argparse.ArgumentParser()
 parser.add_argument('--num_gpus', type=int, default=1, help='How many gpus to use [default: 1]')
 parser.add_argument('--model', default='pointnet2_cls_ssg', help='Model name [default: pointnet2_cls_ssg]')
 parser.add_argument('--log_dir', default='log', help='Log dir [default: log]')
-parser.add_argument('--num_point', type=int, default=1024, help='Point Number [default: 1024]')
+parser.add_argument('--num_point', type=int, default=2048, help='Point Number [default: 1024]')
 parser.add_argument('--max_epoch', type=int, default=251, help='Epoch to run [default: 251]')
 parser.add_argument('--batch_size', type=int, default=32, help='Batch Size during training [default: 32]')
 parser.add_argument('--learning_rate', type=float, default=0.001, help='Initial learning rate [default: 0.001]')
@@ -70,18 +70,18 @@ BN_DECAY_CLIP = 0.99
 
 HOSTNAME = socket.gethostname()
 
-NUM_CLASSES = 40
+NUM_CLASSES = 2
 
 # Shapenet official train/test split
-if FLAGS.normal:
-    assert(NUM_POINT<=10000)
-    DATA_PATH = os.path.join(ROOT_DIR, 'data/modelnet40_normal_resampled')
-    TRAIN_DATASET = modelnet_dataset.ModelNetDataset(root=DATA_PATH, npoints=NUM_POINT, split='train', normal_channel=FLAGS.normal, batch_size=BATCH_SIZE)
-    TEST_DATASET = modelnet_dataset.ModelNetDataset(root=DATA_PATH, npoints=NUM_POINT, split='test', normal_channel=FLAGS.normal, batch_size=BATCH_SIZE)
-else:
-    assert(NUM_POINT<=2048)
-    TRAIN_DATASET = modelnet_h5_dataset.ModelNetH5Dataset(os.path.join(BASE_DIR, 'data/modelnet40_ply_hdf5_2048/train_files.txt'), batch_size=BATCH_SIZE, npoints=NUM_POINT, shuffle=True)
-    TEST_DATASET = modelnet_h5_dataset.ModelNetH5Dataset(os.path.join(BASE_DIR, 'data/modelnet40_ply_hdf5_2048/test_files.txt'), batch_size=BATCH_SIZE, npoints=NUM_POINT, shuffle=False)
+# if FLAGS.normal:
+#     assert(NUM_POINT<=10000)
+#     DATA_PATH = os.path.join(ROOT_DIR, 'data/modelnet40_normal_resampled')
+#     TRAIN_DATASET = modelnet_dataset.ModelNetDataset(root=DATA_PATH, npoints=NUM_POINT, split='train', normal_channel=FLAGS.normal, batch_size=BATCH_SIZE)
+#     TEST_DATASET = modelnet_dataset.ModelNetDataset(root=DATA_PATH, npoints=NUM_POINT, split='test', normal_channel=FLAGS.normal, batch_size=BATCH_SIZE)
+# else:
+assert(NUM_POINT<=2048)
+TRAIN_DATASET = modelnet_h5_dataset.ModelNetH5Dataset(os.path.join(BASE_DIR, 'data/outdoor_ply_hdf5_2048/train_files.txt'), batch_size=BATCH_SIZE, npoints=NUM_POINT, shuffle=True)
+EVAL_DATASET = modelnet_h5_dataset.ModelNetH5Dataset(os.path.join(BASE_DIR, 'data/outdoor_ply_hdf5_2048/eval_files.txt'), batch_size=BATCH_SIZE, npoints=NUM_POINT, shuffle=False)
 
 def log_string(out_str):
     LOG_FOUT.write(out_str+'\n')
@@ -134,7 +134,7 @@ def get_learning_rate(batch):
                         DECAY_RATE,          # Decay rate.
                         staircase=True)
     learning_rate = tf.maximum(learning_rate, 0.00001) # CLIP THE LEARNING RATE!
-    return learning_rate        
+    return learning_rate
 
 def get_bn_decay(batch):
     bn_momentum = tf.train.exponential_decay(
@@ -151,8 +151,8 @@ def train():
         with tf.device('/cpu:0'):
             pointclouds_pl, labels_pl = MODEL.placeholder_inputs(BATCH_SIZE, NUM_POINT)
             is_training_pl = tf.placeholder(tf.bool, shape=())
-            
-            # Note the global_step=batch parameter to minimize. 
+
+            # Note the global_step=batch parameter to minimize.
             # That tells the optimizer to helpfully increment the 'batch' parameter
             # for you every time it trains.
             batch = tf.get_variable('batch', [],
@@ -174,7 +174,7 @@ def train():
             # Allocating variables on CPU first will greatly accelerate multi-gpu training.
             # Ref: https://github.com/kuza55/keras-extras/issues/21
             MODEL.get_model(pointclouds_pl, is_training_pl, bn_decay=bn_decay)
-            
+
             tower_grads = []
             pred_gpu = []
             total_loss_gpu = []
@@ -201,12 +201,12 @@ def train():
 
                         pred_gpu.append(pred)
                         total_loss_gpu.append(total_loss)
-            
+
             # Merge pred and losses from multiple GPUs
             pred = tf.concat(pred_gpu, 0)
             total_loss = tf.reduce_mean(total_loss_gpu)
 
-            # Get training operator 
+            # Get training operator
             grads = average_gradients(tower_grads)
             train_op = optimizer.apply_gradients(grads, global_step=batch)
 
@@ -216,7 +216,7 @@ def train():
 
         # Add ops to save and restore all the variables.
         saver = tf.train.Saver()
-        
+
         # Create a session
         config = tf.ConfigProto()
         config.gpu_options.allow_growth = True
@@ -227,7 +227,7 @@ def train():
         # Add summary writers
         merged = tf.summary.merge_all()
         train_writer = tf.summary.FileWriter(os.path.join(LOG_DIR, 'train'), sess.graph)
-        test_writer = tf.summary.FileWriter(os.path.join(LOG_DIR, 'test'), sess.graph)
+        eval_writer = tf.summary.FileWriter(os.path.join(LOG_DIR, 'eval'), sess.graph)
 
         # Init variables
         init = tf.global_variables_initializer()
@@ -247,9 +247,9 @@ def train():
         for epoch in range(MAX_EPOCH):
             log_string('**** EPOCH %03d ****' % (epoch))
             sys.stdout.flush()
-             
+
             train_one_epoch(sess, ops, train_writer)
-            eval_one_epoch(sess, ops, test_writer)
+            eval_one_epoch(sess, ops, eval_writer)
 
             # Save the variables to disk.
             if epoch % 10 == 0:
@@ -260,7 +260,7 @@ def train():
 def train_one_epoch(sess, ops, train_writer):
     """ ops: dict mapping from string to tf ops """
     is_training = True
-    
+
     log_string(str(datetime.now()))
 
     # Make sure batch data is of same size
@@ -299,14 +299,14 @@ def train_one_epoch(sess, ops, train_writer):
         batch_idx += 1
 
     TRAIN_DATASET.reset()
-        
-def eval_one_epoch(sess, ops, test_writer):
+
+def eval_one_epoch(sess, ops, eval_writer):
     """ ops: dict mapping from string to tf ops """
     global EPOCH_CNT
     is_training = False
 
     # Make sure batch data is of same size
-    cur_batch_data = np.zeros((BATCH_SIZE,NUM_POINT,TEST_DATASET.num_channel()))
+    cur_batch_data = np.zeros((BATCH_SIZE,NUM_POINT,EVAL_DATASET.num_channel()))
     cur_batch_label = np.zeros((BATCH_SIZE), dtype=np.int32)
 
     total_correct = 0
@@ -316,12 +316,12 @@ def eval_one_epoch(sess, ops, test_writer):
     shape_ious = []
     total_seen_class = [0 for _ in range(NUM_CLASSES)]
     total_correct_class = [0 for _ in range(NUM_CLASSES)]
-    
+
     log_string(str(datetime.now()))
     log_string('---- EPOCH %03d EVALUATION ----'%(EPOCH_CNT))
-    
-    while TEST_DATASET.has_next_batch():
-        batch_data, batch_label = TEST_DATASET.next_batch(augment=False)
+
+    while EVAL_DATASET.has_next_batch():
+        batch_data, batch_label = EVAL_DATASET.next_batch(augment=False)
         bsize = batch_data.shape[0]
         # for the last batch in the epoch, the bsize:end are from last batch
         cur_batch_data[0:bsize,...] = batch_data
@@ -332,7 +332,7 @@ def eval_one_epoch(sess, ops, test_writer):
                      ops['is_training_pl']: is_training}
         summary, step, loss_val, pred_val = sess.run([ops['merged'], ops['step'],
             ops['loss'], ops['pred']], feed_dict=feed_dict)
-        test_writer.add_summary(summary, step)
+        eval_writer.add_summary(summary, step)
         pred_val = np.argmax(pred_val, 1)
         correct = np.sum(pred_val[0:bsize] == batch_label[0:bsize])
         total_correct += correct
@@ -343,13 +343,13 @@ def eval_one_epoch(sess, ops, test_writer):
             l = batch_label[i]
             total_seen_class[l] += 1
             total_correct_class[l] += (pred_val[i] == l)
-    
+
     log_string('eval mean loss: %f' % (loss_sum / float(batch_idx)))
     log_string('eval accuracy: %f'% (total_correct / float(total_seen)))
     log_string('eval avg class acc: %f' % (np.mean(np.array(total_correct_class)/np.array(total_seen_class,dtype=np.float))))
     EPOCH_CNT += 1
 
-    TEST_DATASET.reset()
+    EVAL_DATASET.reset()
     return total_correct/float(total_seen)
 
 

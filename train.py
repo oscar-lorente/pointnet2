@@ -22,13 +22,18 @@ import tf_util
 import modelnet_dataset
 import modelnet_h5_dataset
 
+import pickle
+import matplotlib.pyplot as plt
+
 parser = argparse.ArgumentParser()
 parser.add_argument('--gpu', type=int, default=0, help='GPU to use [default: GPU 0]')
 parser.add_argument('--model', default='pointnet2_cls_ssg', help='Model name [default: pointnet2_cls_ssg]')
 parser.add_argument('--log_dir', default='log', help='Log dir [default: log]')
-parser.add_argument('--num_point', type=int, default=2048, help='Point Number [default: 1024]')
+
+parser.add_argument('--num_point', type=int, default=1024, help='Point Number [default: 1024]')
 parser.add_argument('--max_epoch', type=int, default=251, help='Epoch to run [default: 251]')
-parser.add_argument('--batch_size', type=int, default=16, help='Batch Size during training [default: 16]')
+parser.add_argument('--batch_size', type=int, default=32, help='Batch Size during training [default: 16]')
+
 parser.add_argument('--learning_rate', type=float, default=0.001, help='Initial learning rate [default: 0.001]')
 parser.add_argument('--momentum', type=float, default=0.9, help='Initial learning rate [default: 0.9]')
 parser.add_argument('--optimizer', default='adam', help='adam or momentum [default: adam]')
@@ -38,6 +43,13 @@ parser.add_argument('--normal', action='store_true', help='Whether to use normal
 FLAGS = parser.parse_args()
 
 EPOCH_CNT = 0
+
+TRAIN_LOSS_HISTORY = []
+EVAL_LOSS_HISTORY = []
+TRAIN_ACCURACY_HISTORY = []
+EVAL_ACCURACY_HISTORY = []
+PRECISION_HISTORY = []
+RECALL_HISTORY = []
 
 BATCH_SIZE = FLAGS.batch_size
 NUM_POINT = FLAGS.num_point
@@ -104,6 +116,13 @@ def get_bn_decay(batch):
     return bn_decay
 
 def train():
+    global TRAIN_LOSS_HISTORY
+    global EVAL_LOSS_HISTORY
+    global TRAIN_ACCURACY_HISTORY
+    global EVAL_ACCURACY_HISTORY
+    global PRECISION_HISTORY
+    global RECALL_HISTORY
+
     with tf.Graph().as_default():
         with tf.device('/gpu:'+str(GPU_INDEX)):
             pointclouds_pl, labels_pl = MODEL.placeholder_inputs(BATCH_SIZE, NUM_POINT)
@@ -156,8 +175,13 @@ def train():
         eval_writer = tf.summary.FileWriter(os.path.join(LOG_DIR, 'eval'), sess.graph)
 
         # Init variables
+
+        # para entrenar de 0
         init = tf.global_variables_initializer()
         sess.run(init)
+
+        # para reentrenar un modelo no finalizado
+        # saver.restore(sess, 'log/model.ckpt')
 
         ops = {'pointclouds_pl': pointclouds_pl,
                'labels_pl': labels_pl,
@@ -178,13 +202,21 @@ def train():
             eval_one_epoch(sess, ops, eval_writer)
 
             # Save the variables to disk.
-            if epoch % 10 == 0:
-                save_path = saver.save(sess, os.path.join(LOG_DIR, "model.ckpt"))
-                log_string("Model saved in file: %s" % save_path)
-
+            # if epoch % 10 == 0:
+            save_path = saver.save(sess, os.path.join(LOG_DIR, "model.ckpt"))
+            log_string("Model saved in file: %s" % save_path)
+            pickle.dump(TRAIN_LOSS_HISTORY, open("train_loss_history.p", "wb"))
+            pickle.dump(EVAL_LOSS_HISTORY, open("eval_loss_history.p", "wb"))
+            pickle.dump(TRAIN_ACCURACY_HISTORY, open("train_accuracy_history.p", "wb"))
+            pickle.dump(EVAL_ACCURACY_HISTORY, open("eval_accuracy_history.p", "wb"))
+            pickle.dump(PRECISION_HISTORY, open("precision_history.p", "wb"))
+            pickle.dump(RECALL_HISTORY, open("recall_history.p", "wb"))
 
 def train_one_epoch(sess, ops, train_writer):
     """ ops: dict mapping from string to tf ops """
+    global TRAIN_LOSS_HISTORY
+    global TRAIN_ACCURACY_HISTORY
+
     is_training = True
 
     log_string(str(datetime.now()))
@@ -193,12 +225,16 @@ def train_one_epoch(sess, ops, train_writer):
     cur_batch_data = np.zeros((BATCH_SIZE,NUM_POINT,TRAIN_DATASET.num_channel()))
     cur_batch_label = np.zeros((BATCH_SIZE), dtype=np.int32)
 
+    loss_sum_epoch = 0
+    total_correct_epoch = 0
+    total_seen_epoch = 0
+
     total_correct = 0
     total_seen = 0
     loss_sum = 0
     batch_idx = 0
     while TRAIN_DATASET.has_next_batch():
-        batch_data, batch_label = TRAIN_DATASET.next_batch(augment=True)
+        batch_data, batch_label = TRAIN_DATASET.next_batch(augment=False)
         #batch_data = provider.random_point_dropout(batch_data)
         bsize = batch_data.shape[0]
         cur_batch_data[0:bsize,...] = batch_data
@@ -215,6 +251,11 @@ def train_one_epoch(sess, ops, train_writer):
         total_correct += correct
         total_seen += bsize
         loss_sum += loss_val
+
+        loss_sum_epoch += loss_val
+        total_correct_epoch += total_correct
+        total_seen_epoch += total_seen
+
         if (batch_idx+1)%50 == 0:
             log_string(' ---- batch: %03d ----' % (batch_idx+1))
             log_string('mean loss: %f' % (loss_sum / 50))
@@ -225,15 +266,28 @@ def train_one_epoch(sess, ops, train_writer):
         batch_idx += 1
 
     TRAIN_DATASET.reset()
+    TRAIN_LOSS_HISTORY.append(loss_sum_epoch / float(batch_idx))
+    TRAIN_ACCURACY_HISTORY.append(total_correct_epoch / float(total_seen_epoch))
 
 def eval_one_epoch(sess, ops, eval_writer):
     """ ops: dict mapping from string to tf ops """
+    global EVAL_LOSS_HISTORY
+    global EVAL_ACCURACY_HISTORY
+    global PRECISION_HISTORY
+    global RECALL_HISTORY
+
     global EPOCH_CNT
     is_training = False
+
 
     # Make sure batch data is of same size
     cur_batch_data = np.zeros((BATCH_SIZE,NUM_POINT,EVAL_DATASET.num_channel()))
     cur_batch_label = np.zeros((BATCH_SIZE), dtype=np.int32)
+
+    true_positives = 0
+    false_positives = 0
+    true_negatives = 0
+    false_negatives = 0
 
     total_correct = 0
     total_seen = 0
@@ -269,10 +323,31 @@ def eval_one_epoch(sess, ops, eval_writer):
             l = batch_label[i]
             total_seen_class[l] += 1
             total_correct_class[l] += (pred_val[i] == l)
+            if l == 1:
+                if pred_val[i] == l:
+                    true_positives += 1
+                else:
+                    false_negatives += 1
+            elif l == 0:
+                if pred_val[i] == l:
+                    true_negatives += 1
+                else:
+                    false_positives += 1
+
+    EVAL_LOSS_HISTORY.append(loss_sum / float(batch_idx))
+    EVAL_ACCURACY_HISTORY.append(np.mean(np.array(total_correct_class)/np.array(total_seen_class,dtype=np.float)))
+    PRECISION_HISTORY.append(true_positives / float(true_positives + false_positives))
+    RECALL_HISTORY.append(true_positives / float(true_positives + false_negatives))
 
     log_string('eval mean loss: %f' % (loss_sum / float(batch_idx)))
-    log_string('eval accuracy: %f'% (total_correct / float(total_seen)))
+    log_string('eval accuracy: %f' % (total_correct / float(total_seen)))
     log_string('eval avg class acc: %f' % (np.mean(np.array(total_correct_class)/np.array(total_seen_class,dtype=np.float))))
+    log_string('total_seen: %i' % (total_seen))
+    log_string('total pedestrians: %i' % (total_seen_class[1]))
+    log_string('tp: %i , fn: %i' % (true_positives, false_negatives))
+    log_string('tn: %i , fp: %i' % (true_negatives, false_positives))
+    log_string('pedestrian precision: %f' % (true_positives / float(true_positives + false_positives)))
+    log_string('pedestrian recall: %f' % (true_positives / float(true_positives + false_negatives)))
     EPOCH_CNT += 1
 
     EVAL_DATASET.reset()

@@ -1,0 +1,13 @@
+Namespace(batch_size=32, dump_dir='dump', gpu=0, model='pointnet2_cls_ssg', model_path='log/model.ckpt', normal=False, num_point=1024, num_votes=1)
+Model restored.
+eval mean loss: 0.045236
+eval accuracy: 0.997637
+eval avg class acc: 0.992260
+not_pedestrian:	0.999
+pedestrian:	0.986
+total_seen: 3385
+total pedestrians: 345
+tp: 340 , fn: 5
+tn: 3037 , fp: 3
+pedestrian precision: 0.991254
+pedestrian recall: 0.985507

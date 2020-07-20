@@ -23,7 +23,7 @@ import modelnet_h5_dataset
 parser = argparse.ArgumentParser()
 parser.add_argument('--gpu', type=int, default=0, help='GPU to use [default: GPU 0]')
 parser.add_argument('--model', default='pointnet2_cls_ssg', help='Model name. [default: pointnet2_cls_ssg]')
-parser.add_argument('--batch_size', type=int, default=16, help='Batch Size during training [default: 16]')
+parser.add_argument('--batch_size', type=int, default=32, help='Batch Size during training [default: 16]')
 parser.add_argument('--num_point', type=int, default=1024, help='Point Number [256/512/1024/2048] [default: 1024]')
 parser.add_argument('--model_path', default='log/model.ckpt', help='model checkpoint file path [default: log/model.ckpt]')
 parser.add_argument('--dump_dir', default='dump', help='dump folder path [dump]')
@@ -42,9 +42,9 @@ if not os.path.exists(DUMP_DIR): os.mkdir(DUMP_DIR)
 LOG_FOUT = open(os.path.join(DUMP_DIR, 'log_evaluate.txt'), 'w')
 LOG_FOUT.write(str(FLAGS)+'\n')
 
-NUM_CLASSES = 40
+NUM_CLASSES = 2
 SHAPE_NAMES = [line.rstrip() for line in \
-    open(os.path.join(ROOT_DIR, 'data/modelnet40_ply_hdf5_2048/shape_names.txt'))]
+    open(os.path.join(ROOT_DIR, 'data/outdoor_ply_hdf5_2048/shape_names.txt'))]
 
 HOSTNAME = socket.gethostname()
 
@@ -56,8 +56,8 @@ HOSTNAME = socket.gethostname()
 #     TEST_DATASET = modelnet_dataset.ModelNetDataset(root=DATA_PATH, npoints=NUM_POINT, split='test', normal_channel=FLAGS.normal, batch_size=BATCH_SIZE)
 # else:
 assert(NUM_POINT<=2048)
-TRAIN_DATASET = modelnet_h5_dataset.ModelNetH5Dataset(os.path.join(BASE_DIR, 'data/modelnet40_ply_hdf5_2048/train_files.txt'), batch_size=BATCH_SIZE, npoints=NUM_POINT, shuffle=True)
-TEST_DATASET = modelnet_h5_dataset.ModelNetH5Dataset(os.path.join(BASE_DIR, 'data/modelnet40_ply_hdf5_2048/test_files.txt'), batch_size=BATCH_SIZE, npoints=NUM_POINT, shuffle=False)
+TRAIN_DATASET = modelnet_h5_dataset.ModelNetH5Dataset(os.path.join(BASE_DIR, 'data/outdoor_ply_hdf5_2048/train_files.txt'), batch_size=BATCH_SIZE, npoints=NUM_POINT, shuffle=True)
+TEST_DATASET = modelnet_h5_dataset.ModelNetH5Dataset(os.path.join(BASE_DIR, 'data/outdoor_ply_hdf5_2048/test_files.txt'), batch_size=BATCH_SIZE, npoints=NUM_POINT, shuffle=False)
 
 def log_string(out_str):
     LOG_FOUT.write(out_str+'\n')
@@ -106,6 +106,11 @@ def eval_one_epoch(sess, ops, num_votes=1, topk=1):
     cur_batch_data = np.zeros((BATCH_SIZE,NUM_POINT,TEST_DATASET.num_channel()))
     cur_batch_label = np.zeros((BATCH_SIZE), dtype=np.int32)
 
+    true_positives = 0
+    false_positives = 0
+    true_negatives = 0
+    false_negatives = 0
+
     total_correct = 0
     total_seen = 0
     loss_sum = 0
@@ -113,6 +118,8 @@ def eval_one_epoch(sess, ops, num_votes=1, topk=1):
     shape_ious = []
     total_seen_class = [0 for _ in range(NUM_CLASSES)]
     total_correct_class = [0 for _ in range(NUM_CLASSES)]
+
+    total_pedestrian = 0
 
     while TEST_DATASET.has_next_batch():
         batch_data, batch_label = TEST_DATASET.next_batch(augment=False)
@@ -123,21 +130,21 @@ def eval_one_epoch(sess, ops, num_votes=1, topk=1):
         cur_batch_label[0:bsize] = batch_label
 
         batch_pred_sum = np.zeros((BATCH_SIZE, NUM_CLASSES)) # score for classes
-        for vote_idx in range(num_votes):
-            # Shuffle point order to achieve different farthest samplings
-            shuffled_indices = np.arange(NUM_POINT)
-            np.random.shuffle(shuffled_indices)
-            if FLAGS.normal:
-                rotated_data = provider.rotate_point_cloud_by_angle_with_normal(cur_batch_data[:, shuffled_indices, :],
-                    vote_idx/float(num_votes) * np.pi * 2)
-            else:
-                rotated_data = provider.rotate_point_cloud_by_angle(cur_batch_data[:, shuffled_indices, :],
-                    vote_idx/float(num_votes) * np.pi * 2)
-            feed_dict = {ops['pointclouds_pl']: rotated_data,
-                         ops['labels_pl']: cur_batch_label,
-                         ops['is_training_pl']: is_training}
-            loss_val, pred_val = sess.run([ops['loss'], ops['pred']], feed_dict=feed_dict)
-            batch_pred_sum += pred_val
+        # for vote_idx in range(num_votes):
+        #     # Shuffle point order to achieve different farthest samplings
+        #     shuffled_indices = np.arange(NUM_POINT)
+        #     np.random.shuffle(shuffled_indices)
+        #     if FLAGS.normal:
+        #         rotated_data = provider.rotate_point_cloud_by_angle_with_normal(cur_batch_data[:, shuffled_indices, :],
+        #             vote_idx/float(num_votes) * np.pi * 2)
+        #     else:
+        #         rotated_data = provider.rotate_point_cloud_by_angle(cur_batch_data[:, shuffled_indices, :],
+        #             vote_idx/float(num_votes) * np.pi * 2)
+        feed_dict = {ops['pointclouds_pl']: cur_batch_data,
+                     ops['labels_pl']: cur_batch_label,
+                     ops['is_training_pl']: is_training}
+        loss_val, pred_val = sess.run([ops['loss'], ops['pred']], feed_dict=feed_dict)
+        batch_pred_sum += pred_val
         pred_val = np.argmax(batch_pred_sum, 1)
         correct = np.sum(pred_val[0:bsize] == batch_label[0:bsize])
         total_correct += correct
@@ -148,6 +155,17 @@ def eval_one_epoch(sess, ops, num_votes=1, topk=1):
             l = batch_label[i]
             total_seen_class[l] += 1
             total_correct_class[l] += (pred_val[i] == l)
+            if l == 1:
+                total_pedestrian += 1
+                if pred_val[i] == l:
+                    true_positives += 1
+                else:
+                    false_negatives += 1
+            elif l == 0:
+                if pred_val[i] == l:
+                    true_negatives += 1
+                else:
+                    false_positives += 1
 
     log_string('eval mean loss: %f' % (loss_sum / float(batch_idx)))
     log_string('eval accuracy: %f'% (total_correct / float(total_seen)))
@@ -157,6 +175,12 @@ def eval_one_epoch(sess, ops, num_votes=1, topk=1):
     for i, name in enumerate(SHAPE_NAMES):
         log_string('%10s:\t%0.3f' % (name, class_accuracies[i]))
 
+    log_string('total_seen: %i' % (total_seen))
+    log_string('total pedestrians: %i' % (total_pedestrian))
+    log_string('tp: %i , fn: %i' % (true_positives, false_negatives))
+    log_string('tn: %i , fp: %i' % (true_negatives, false_positives))
+    log_string('pedestrian precision: %f' % (true_positives / float(true_positives + false_positives)))
+    log_string('pedestrian recall: %f' % (true_positives / float(true_positives + false_negatives)))
 
 if __name__=='__main__':
     with tf.Graph().as_default():
